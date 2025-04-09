@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 import base64
+import uvicorn
 from io import BytesIO
 
 from .models import CodeAnalysisRequest, CodeAnalysisResponse, CodeAnalysisResponseWithPDF
@@ -59,3 +60,6 @@ async def upload_code_file(file: UploadFile = File(...), generate_pdf: bool = Fa
         return code_review_service.review_with_pdf(request)
     else:
         return code_review_service.review_python_code(request)
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)    
