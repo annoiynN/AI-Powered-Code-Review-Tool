@@ -38,7 +38,7 @@ class CodeReviewService:
             errors=all_errors,
             recommendations=recommendations
         )
-    
+
     def review_with_pdf(self, request: CodeAnalysisRequest) -> CodeAnalysisResponseWithPDF:
 
         analysis_result = self.review_python_code(request)

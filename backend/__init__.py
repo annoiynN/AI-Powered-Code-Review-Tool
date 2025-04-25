@@ -7,4 +7,4 @@ from .code_improver import *
 from .report_generator import *
 
 __version__ = '0.1.0'
-__author__ = 'AI Code Reviewer Team'
+__author__ = 'Dmytro Pitsyk'

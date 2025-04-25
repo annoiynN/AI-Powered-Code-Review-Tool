@@ -1,5 +1,6 @@
 import sys
 import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import requests
 import base64
 import tempfile
@@ -9,8 +10,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVB
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QTextCursor
 from PyQt5.QtCore import Qt, QRegExp, QThread, pyqtSignal
 
-# Базовый URL API
-API_URL = "http://localhost:8000"
+# URL API
+API_URL = "http://127.0.0.1:8002" 
 
 class PythonHighlighter(QSyntaxHighlighter):
     """Подсветка синтаксиса Python"""

@@ -3,9 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import base64
 import uvicorn
 from io import BytesIO
+import sys
+import os
 
-from .models import CodeAnalysisRequest, CodeAnalysisResponse, CodeAnalysisResponseWithPDF
-from .services import CodeReviewService
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from backend.models import CodeAnalysisRequest, CodeAnalysisResponse, CodeAnalysisResponseWithPDF
+from backend.services import CodeReviewService
 
 app = FastAPI(title="AI Code Reviewer")
 
@@ -22,13 +25,26 @@ code_review_service = CodeReviewService()
 
 @app.post("/analyze", response_model=CodeAnalysisResponse)
 async def analyze_code(request: CodeAnalysisRequest):
-    """Анализ кода без PDF отчета"""
-    return code_review_service.review_python_code(request)
+    """without PDF"""
+    try:
+        print(f"Получен запрос на анализ кода: {len(request.code)} символов")
+        result = code_review_service.review_python_code(request)
+        print("Анализ завершен успешно")
+        return result
+    except Exception as e:
+        print(f"Ошибка при анализе: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise
 
 @app.post("/analyze_with_pdf", response_model=CodeAnalysisResponseWithPDF)
 async def analyze_code_with_pdf(request: CodeAnalysisRequest):
     """Анализ кода с опциональным PDF отчетом"""
     return code_review_service.review_with_pdf(request)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 @app.post("/get_pdf_report")
 async def get_pdf_report(request: CodeAnalysisRequest):
@@ -36,7 +52,7 @@ async def get_pdf_report(request: CodeAnalysisRequest):
     analysis_result = code_review_service.review_python_code(request)
     pdf_buffer = BytesIO()
     
-    from .report_generator import PDFReportGenerator
+    from backend.report_generator import PDFReportGenerator
     pdf_buffer = PDFReportGenerator.generate_report(analysis_result, request.code)
     
     return Response(
@@ -62,4 +78,4 @@ async def upload_code_file(file: UploadFile = File(...), generate_pdf: bool = Fa
         return code_review_service.review_python_code(request)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)    
+    uvicorn.run(app, host="0.0.0.0", port=8002)
