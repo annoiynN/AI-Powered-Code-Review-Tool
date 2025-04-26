@@ -250,19 +250,19 @@ class CodeParser:
     # Placeholder methods for other languages
     def _parse_java(self, content: str) -> Dict[str, Any]:
         """Placeholder for Java parsing"""
-        return {"message": "Java parsing not fully implemented yet"}
+        return {"message": "Java parsing not fully implemented yet xd"}
     
     def _parse_csharp(self, content: str) -> Dict[str, Any]:
         """Placeholder for C# parsing"""
-        return {"message": "C# parsing not fully implemented yet"}
+        return {"message": "C# parsing not fully implemented yet xd"}
     
     def _parse_c(self, content: str) -> Dict[str, Any]:
         """Placeholder for C parsing"""
-        return {"message": "C parsing not fully implemented yet"}
+        return {"message": "C parsing not fully implemented yet xd"}
     
     def _parse_cpp(self, content: str) -> Dict[str, Any]:
         """Placeholder for C++ parsing"""
-        return {"message": "C++ parsing not fully implemented yet"}
+        return {"message": "C++ parsing not fully implemented yet xd"}
     
     def get_line_range(self, start_line: int, end_line: int) -> List[str]:
         """
@@ -305,16 +305,17 @@ class CodeParser:
                 
         return None
 
-def parse_directory(directory_path: str) -> Dict[str, Dict[str, Any]]:
-    """
-    Parse all supported source code files in a directory
-    
-    Args:
-        directory_path: Path to the directory containing source files
+    @classmethod
+    def parse_python_code(cls, code: str) -> Dict[str, Any]:
+
         
-    Returns:
-        Dictionary mapping file paths to their parsed representations
-    """
+        instance = cls()
+        return instance._parse_python(code)
+
+
+
+def parse_directory(directory_path: str) -> Dict[str, Dict[str, Any]]:
+
     parser = CodeParser()
     results = {}
     
@@ -334,6 +335,7 @@ def parse_directory(directory_path: str) -> Dict[str, Dict[str, Any]]:
                 results[file_path] = parser.parse_file(file_path)
                 
     return results
+
 
 if __name__ == "__main__":
     # Example usage

@@ -11,7 +11,7 @@ from PyQt5.QtGui import QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QTex
 from PyQt5.QtCore import Qt, QRegExp, QThread, pyqtSignal
 
 # URL API
-API_URL = "http://127.0.0.1:8002" 
+API_URL = "http://127.0.0.1:8026" 
 
 class PythonHighlighter(QSyntaxHighlighter):
     """Подсветка синтаксиса Python"""
@@ -222,116 +222,218 @@ if __name__ == "__main__":
         self.analysis_thread.finished.connect(self.analysis_completed)
         self.analysis_thread.start()
     
-    def handle_analysis_results(self, results):
-        # Обработка результатов анализа
-        if 'analysis' in results:  # Результат с PDF
-            analysis = results['analysis']
-            pdf_content = results.get('pdf_content')
-        else:  # Результат без PDF
-            analysis = results
-            pdf_content = None
+    def handle_analysis_results(self, response_data):
+        """Processes the results of the analysis and displays them in the interface."""
+        try:
+            # Очистка предыдущих результатов
+            self.results_text.clear()
+            
+            # Заголовок отчета
+            report = "Code analysis is complete\n\n"
+            
+            # Обработка структуры кода
+            if "code_structure" in response_data:
+                structure = response_data["code_structure"]
+                
+                # Функции
+                if "functions" in structure and structure["functions"]:
+                    report += "functions:\n"
+                    for func in structure["functions"]:
+                        # Проверяем наличие ключа 'line_number' или 'lineno'
+                        line_number = func.get('line_number', func.get('lineno', 'N/A'))
+                        report += f"- {func['name']} (line {line_number})\n"
+                    report += "\n"
+                    
+                # Классы
+                if "classes" in structure and structure["classes"]:
+                    report += "classes:\n"
+                    for cls in structure["classes"]:
+                        # Проверяем наличие ключа 'line_number' или 'lineno'
+                        line_number = cls.get('line_number', cls.get('lineno', 'N/A'))
+                        report += f"- {cls['name']} (line {line_number})\n"
+                    report += "\n"
+                
+                # Импорты
+                if "imports" in structure and structure["imports"]:
+                    report += "imports:\n"
+                    for imp in structure["imports"]:
+                        report += f"- {imp}\n"
+                    report += "\n"
+            
+            # Обработка ошибок
+            if "errors" in response_data and response_data["errors"]:
+                errors = response_data["errors"]
+                report += f"Found {len(errors)} problems in the code:\n\n"
+                
+                for i, error in enumerate(errors, 1):
+                    report += f"{i}. {error['message']}\n"
+                    report += f"   type: {error['type']}\n"
+                    report += f"   line_start: {error['line_start']}"
+                    if error.get('line_end') and error['line_end'] != error['line_start']:
+                        report += f"-{error['line_end']}"
+                    report += "\n"
+                    
+                    if error.get('category'):
+                        report += f"   category: {error['category']}\n"
+                        
+                    if error.get('severity'):
+                        report += f"   severity: {error['severity']}\n"
+                        
+                    if error.get('suggestion'):
+                        report += f"   suggestion: {error['suggestion']}\n"
+                        
+                    if error.get('affected_code'):
+                        report += f"   affected code: {error['affected_code']}\n"
+                        
+                    report += "\n"
+            else:
+                report += "No problems detected in the code.\n\n"
+                
+            # Рекомендации по улучшению
+            if "recommendations" in response_data and response_data["recommendations"]:
+                recommendations = response_data["recommendations"]
+                report += f"recommendations({len(recommendations)}):\n\n"
+                
+                for i, rec in enumerate(recommendations, 1):
+                    if isinstance(rec, dict) and 'suggested_fix' in rec:
+                        report += f"{i}. {rec['suggested_fix']}\n\n"
+                    elif hasattr(rec, 'suggested_fix'):
+                        report += f"{i}. {rec.suggested_fix}\n\n"
+                    else:
+                        report += f"{i}. {str(rec)}\n\n"
+            
+            # Проверка на PDF
+            if "pdf_content" in response_data and response_data["pdf_content"]:
+                pdf_data = base64.b64decode(response_data["pdf_content"])
+                
+                # Сохраняем PDF во временный файл
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    temp_file.write(pdf_data)
+                    pdf_path = temp_file.name
+                
+                report += f"PDF saved to: {pdf_path}\n"
+                self.status_label.setText(f"PDF saved to: {pdf_path}")
+            
+            # Отображение отчета
+            self.results_text.setText(report)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in processing results: {str(e)}")
+            import traceback
+            traceback.print_exc()  # Выводим полный стек ошибки в консоль для отладки
         
-        # Формирование отчета в текстовом виде
-        report = ""
+    def handle_analysis_error(self, error_message):
+        QMessageBox.critical(self, "Analysis Error", error_message)
+        self.status_label.setText("Analysis failed. See error message.")
+    
+    def analysis_completed(self):
+        # Сбрасываем индикаторы загрузки
+        self.progress_bar.setVisible(False)
+        self.analyze_btn.setEnabled(True)
+        self.analyze_pdf_btn.setEnabled(True)
         
-        # Структура кода
-        report += "=== CODE STRUCTURE ===\n\n"
+        if not self.status_label.text().startswith("PDF saved to"):
+            self.status_label.setText("Analysis completed")
+    
+def handle_analysis_results(self, response_data):
+    """Processes the results of the analysis and displays them in the interface."""
+    try:
+        # Очистка предыдущих результатов
+        self.results_text.clear()
         
-        # Функции
-        functions = analysis['code_structure']['functions']
-        if functions:
-            report += "FUNCTIONS:\n"
-            for func in functions:
-                report += f"- {func['name']} (line {func['line_number']})\n"
-                if func.get('docstring'):
-                    report += f"  Docstring: {func['docstring']}\n"
-            report += "\n"
+        # Заголовок отчета
+        report = "Code analysis is complete\n\n"
         
-        # Классы
-        classes = analysis['code_structure']['classes']
-        if classes:
-            report += "CLASSES:\n"
-            for cls in classes:
-                report += f"- {cls['name']} (line {cls['line_number']})\n"
-                if cls.get('docstring'):
-                    report += f"  Docstring: {cls['docstring']}\n"
-            report += "\n"
+        # Обработка структуры кода
+        if "code_structure" in response_data:
+            structure = response_data["code_structure"]
+            
+            # Функции
+            if "functions" in structure and structure["functions"]:
+                report += "Functions found:\n"
+                for func in structure["functions"]:
+                    # Проверяем наличие ключа 'line_number' или 'lineno'
+                    line_number = func.get('line_number', func.get('lineno', 'N/A'))
+                    report += f"- {func['name']} (line {line_number})\n"
+                report += "\n"
+                
+            # Классы
+            if "classes" in structure and structure["classes"]:
+                report += "Classes found:\n"
+                for cls in structure["classes"]:
+                    # Проверяем наличие ключа 'line_number' или 'lineno'
+                    line_number = cls.get('line_number', cls.get('lineno', 'N/A'))
+                    report += f"- {cls['name']} (line {line_number})\n"
+                report += "\n"
+            
+            # Импорты
+            if "imports" in structure and structure["imports"]:
+                report += "Imported modules:\n"
+                for imp in structure["imports"]:
+                    report += f"- {imp}\n"
+                report += "\n"
         
-        # Импорты
-        imports = analysis['code_structure']['imports']
-        if imports:
-            report += "IMPORTS:\n"
-            for imp in imports:
-                report += f"- {imp}\n"
-            report += "\n"
-        
-        # Ошибки
-        errors = analysis['errors']
-        report += f"=== DETECTED ERRORS ({len(errors)}) ===\n\n"
-        
-        if errors:
+        # Обработка ошибок
+        if "errors" in response_data and response_data["errors"]:
+            errors = response_data["errors"]
+            report += f"Found {len(errors)} problems in the code:\n\n"
+            
             for i, error in enumerate(errors, 1):
-                severity = error['severity'].upper()
-                report += f"{i}. {severity}: {error['type']}\n"
-                report += f"   Line {error['line']}: {error['message']}\n\n"
+                report += f"{i}. {error['message']}\n"
+                report += f"   type: {error['type']}\n"
+                report += f"   line number: {error['line_start']}"
+                if error.get('line_end') and error['line_end'] != error['line_start']:
+                    report += f"-{error['line_end']}"
+                report += "\n"
+                
+                if error.get('category'):
+                    report += f"   Category: {error['category']}\n"
+                    
+                if error.get('severity'):
+                    report += f"   Severity: {error['severity']}\n"
+                    
+                if error.get('suggestion'):
+                    report += f"   Suggestion: {error['suggestion']}\n"
+                    
+                if error.get('affected_code'):
+                    report += f"   Affected code: {error['affected_code']}\n"
+                    
+                report += "\n"
         else:
-            report += "No errors detected.\n\n"
-        
-        # Рекомендации
-        recommendations = analysis['recommendations']
-        report += f"=== RECOMMENDATIONS ({len(recommendations)}) ===\n\n"
-        
-        if recommendations:
+            report += "No problems detected in the code.\n\n"
+            
+        # Рекомендации по улучшению
+        if "recommendations" in response_data and response_data["recommendations"]:
+            recommendations = response_data["recommendations"]
+            report += f"Recommendations for improvement ({len(recommendations)}):\n\n"
+            
             for i, rec in enumerate(recommendations, 1):
-                error = rec['original_error']
-                report += f"{i}. For error on line {error['line']}: {error['message']}\n"
-                report += "   Suggested fix:\n"
-                report += f"   {rec['suggested_fix']}\n\n"
-        else:
-            report += "No recommendations available.\n\n"
+                if isinstance(rec, dict) and 'suggested_fix' in rec:
+                    report += f"{i}. {rec['suggested_fix']}\n\n"
+                elif hasattr(rec, 'suggested_fix'):
+                    report += f"{i}. {rec.suggested_fix}\n\n"
+                else:
+                    report += f"{i}. {str(rec)}\n\n"
         
+        # Проверка на PDF
+        if "pdf_content" in response_data and response_data["pdf_content"]:
+            pdf_data = base64.b64decode(response_data["pdf_content"])
+            
+            # Сохраняем PDF во временный файл
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                temp_file.write(pdf_data)
+                pdf_path = temp_file.name
+            
+            report += f"PDF-отчет сохранен в: {pdf_path}\n"
+            self.status_label.setText(f"PDF saved to: {pdf_path}")
+        
+        # Отображение отчета
         self.results_text.setText(report)
         
-        # Обработка PDF, если есть
-        if pdf_content:
-            try:
-                # Сохранение PDF во временный файл
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                    tmp.write(base64.b64decode(pdf_content))
-                    pdf_path = tmp.name
-                
-                # Спрашиваем, хочет ли пользователь открыть PDF
-                reply = QMessageBox.question(
-                    self, 
-                    "PDF Generated", 
-                    "PDF report has been generated. Would you like to open it now?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    # Открываем PDF в системном просмотрщике
-                    if sys.platform == 'win32':
-                        os.startfile(pdf_path)
-                    elif sys.platform == 'darwin':  # macOS
-                        import subprocess
-                        subprocess.run(['open', pdf_path])
-                    else:  # Linux
-                        import subprocess
-                        subprocess.run(['xdg-open', pdf_path])
-                
-                # Предлагаем сохранить PDF
-                save_path, _ = QFileDialog.getSaveFileName(
-                    self, "Save PDF Report", "code_analysis_report.pdf", "PDF Files (*.pdf)"
-                )
-                
-                if save_path:
-                    import shutil
-                    shutil.copy2(pdf_path, save_path)
-                    self.status_label.setText(f"PDF saved to: {save_path}")
-                
-            except Exception as e:
-                QMessageBox.warning(self, "PDF Handling Error", f"Error processing PDF: {str(e)}")
+    except Exception as e:
+        QMessageBox.critical(self, "Error", f"Ошибка при обработке результатов: {str(e)}")
+        import traceback
+        traceback.print_exc()  # Выводим полный стек ошибки в консоль для отладки
     
     def handle_analysis_error(self, error_message):
         QMessageBox.critical(self, "Analysis Error", error_message)

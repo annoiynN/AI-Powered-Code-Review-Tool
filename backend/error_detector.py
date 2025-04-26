@@ -1,22 +1,16 @@
-"""
-error_detector.py - Module for detecting potential errors and issues in source code.
-
-This module is responsible for:
-1. Detecting syntax errors
-2. Identifying common programming mistakes
-3. Finding potential bugs and logical issues
-4. Detecting code style violations
-5. Identifying security vulnerabilities
-"""
-
 import ast
 import re
 import logging
+import tempfile
 from typing import Dict, List, Any, Union, Set, Tuple, Optional
 import os
+import subprocess
 
-# Import the code parser module
+
+# Import the code parser module 
 from backend.code_parser import CodeParser
+from backend.models import ErrorDetail, CodeError as PydanticCodeError, RecommendationDetail, CodeStructureDetail
+
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -44,9 +38,9 @@ class CodeError:
     
     def __init__(
         self,
-        code: str,
+        type: str,  
         message: str,
-        line_start: int,
+        line_start: int,  
         line_end: Optional[int] = None,
         column_start: Optional[int] = None,
         column_end: Optional[int] = None,
@@ -55,22 +49,8 @@ class CodeError:
         suggestion: Optional[str] = None,
         affected_code: Optional[str] = None
     ):
-        """
-        Initialize a code error.
-        
-        Args:
-            code: Error code identifier
-            message: Human-readable error message
-            line_start: Line number where the error starts (1-based)
-            line_end: Line number where the error ends (optional)
-            column_start: Column number where the error starts (optional)
-            column_end: Column number where the error ends (optional)
-            category: Error category (syntax, security, etc.)
-            severity: Error severity level
-            suggestion: Suggested fix or improvement
-            affected_code: The problematic code snippet
-        """
-        self.code = code
+
+        self.type = type
         self.message = message
         self.line_start = line_start
         self.line_end = line_end or line_start
@@ -83,42 +63,140 @@ class CodeError:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert the error to a dictionary representation."""
-        return {
-            "code": self.code,
+        return { 
+            "type": self.type,
             "message": self.message,
-            "location": {
-                "line_start": self.line_start,
-                "line_end": self.line_end,
-                "column_start": self.column_start,
-                "column_end": self.column_end
-            },
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "column_start": self.column_start,
+            "column_end": self.column_end,
             "category": self.category,
             "severity": self.severity,
             "suggestion": self.suggestion,
             "affected_code": self.affected_code
         }
+    
+    def to_pydantic_model(self) -> PydanticCodeError:
+        """Convert the error to a Pydantic model."""
+        return PydanticCodeError(
+            type=self.type,
+            message=self.message,
+            line_start=self.line_start,
+            line_end=self.line_end,
+            column_start=self.column_start,
+            column_end=self.column_end,
+            category=self.category,
+            severity=self.severity,
+            suggestion=self.suggestion,
+            affected_code=self.affected_code
+        )
+
 
 class ErrorDetector:
-    """Main class for detecting errors in source code."""
-    
     def __init__(self):
-        """Initialize the error detector."""
         self.parser = CodeParser()
         self.current_file = None
         self.current_language = None
         self.parsed_code = None
         self.code_lines = []
-        
+
+    def detect_pattern_errors(self, code: str = None, language: str = None) -> List[CodeError]:
+        if language is None:
+            language = self.current_language if hasattr(self, 'current_language') else "python"
+        if code is None:
+            code = self.code_lines if hasattr(self, 'code_lines') else []
+
+        errors = []
+
+        patterns = {
+            "python": [
+                (r'print\s*\(', "PY_PRINT_DEBUG", "Print statement in production code",
+                 ErrorCategory.BEST_PRACTICE, ErrorSeverity.LOW,
+                 "Consider using proper logging instead of print statements."),
+
+                (r'(?<![\'"])password\s*=\s*[\'"][^\'"]+[\'"]', "PY_HARDCODED_PASSWORD",
+                 "Hardcoded password detected",
+                 ErrorCategory.SECURITY, ErrorSeverity.HIGH,
+                 "Never hardcode passwords, use environment variables or secure vaults."),
+
+                (r'os\.system\(', "PY_OS_SYSTEM", "Potential command injection vulnerability",
+                 ErrorCategory.SECURITY, ErrorSeverity.HIGH,
+                 "Use subprocess module with shell=False instead of os.system."),
+            ]
+        }
+
+        if language not in patterns:
+            return errors
+
+        language_patterns = patterns[language]
+        code_lines = code.splitlines() if isinstance(code, str) else code
+
+        for i, line in enumerate(code_lines):
+            for pattern, code_id, message, category, severity, suggestion in language_patterns:
+                if re.search(pattern, line):
+                    errors.append(CodeError(
+                        type=code_id,
+                        message=message,
+                        line_start=i + 1,
+                        category=category,
+                        severity=severity,
+                        suggestion=suggestion,
+                        affected_code=line.strip(),
+                        
+                    ))
+
+        return errors
+
+    def run_pylint_analysis(self, code: str) -> List[CodeError]:
+        errors = []
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8') as temp_file:
+            temp_file.write(code)
+            temp_file_path = temp_file.name
+
+        try:
+            result = subprocess.run(
+                ["pylint", temp_file_path, "--disable=all", "--enable=E,W,C,R", "--output-format=text"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            for line in result.stdout.splitlines():
+                # Пример строки: test.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+                match = re.match(r'^.+:(\d+):\d+:\s+([A-Z]\d+):\s+(.*?)(\s\([^)]+\))?$', line)
+                if match:
+                    line_number = int(match.group(1))
+                    code_id = match.group(2)
+                    message = match.group(3).strip()
+
+                    # Классификация по типу ошибки
+                    if code_id.startswith("E"):
+                        severity = ErrorSeverity.HIGH
+                        category = ErrorCategory.SYNTAX
+                    elif code_id.startswith("W"):
+                        severity = ErrorSeverity.MEDIUM
+                        category = ErrorCategory.BEST_PRACTICE
+                    else:
+                        severity = ErrorSeverity.LOW
+                        category = ErrorCategory.STYLE
+
+                    errors.append(CodeError(
+                        type=code_id,
+                        message=message,
+                        line_start=line_number,
+                        category=category,
+                        severity=severity,
+                        suggestion="Review the pylint warning.",
+                        affected_code=""
+                    ))
+
+        finally:
+            os.remove(temp_file_path)
+
+        return errors
+
+  
     def analyze_file(self, file_path: str) -> Dict[str, Any]:
-        """
-        Analyze a source code file for errors and issues.
-        
-        Args:
-            file_path: Path to the source code file
-            
-        Returns:
-            Dictionary containing analysis results with detected errors
-        """
         try:
             self.current_file = file_path
             
@@ -126,10 +204,11 @@ class ErrorDetector:
             self.parsed_code = self.parser.parse_file(file_path)
             
             if not self.parsed_code.get("success", False):
+                parsing_error = self._create_parsing_error(self.parsed_code.get("error", "Unknown parsing error"))
                 return {
                     "success": False,
                     "file_path": file_path,
-                    "errors": [self._create_parsing_error(self.parsed_code.get("error", "Unknown parsing error"))]
+                    "errors": [parsing_error.to_pydantic_model()]
                 }
                 
             self.code_lines = self.parsed_code.get("code_lines", [])
@@ -144,9 +223,9 @@ class ErrorDetector:
                 errors.extend(self._detect_javascript_errors())
             elif self.current_language in ["java", "csharp", "c", "cpp"]:
                 errors.append(CodeError(
-                    "UNSUPPORTED_LANGUAGE",
-                    f"Full error detection for {self.current_language} not implemented yet",
-                    1,
+                    type="UNSUPPORTED_LANGUAGE",
+                    message=f"Full error detection for {self.current_language} not implemented yet",
+                    line_start=1,
                     category=ErrorCategory.INFO,
                     severity=ErrorSeverity.INFO
                 ))
@@ -154,53 +233,69 @@ class ErrorDetector:
             # Common detectors that work across languages
             errors.extend(self._detect_common_issues())
             
+            # Преобразуем наши объекты CodeError в Pydantic-модели
+            pydantic_errors = [error.to_pydantic_model() for error in errors]
+            
+            # Создаем рекомендации на основе ошибок
+            recommendations = []
+            for error in errors:
+                if error.suggestion:
+                    # Создаем объект RecommendationDetail для каждой ошибки с предложением
+                    recommendations.append(RecommendationDetail(
+                        original_error=error.to_pydantic_model(),
+                        suggested_fix=error.suggestion
+                    ))
+            
+            # Создаем заглушку для структуры кода (в реальном коде здесь должен быть 
+            # анализ структуры кода из parsed_code)
+            code_structure = CodeStructureDetail(
+                functions=[],  # Здесь должен быть список функций из кода
+                classes=[],    # Здесь должен быть список классов из кода
+                imports=[]     # Здесь должен быть список импортов из кода
+            )
+            
             return {
                 "success": True,
                 "file_path": file_path,
                 "language": self.current_language,
-                "errors": [error.to_dict() for error in errors],
+                "code_structure": code_structure,
+                "errors": pydantic_errors,
+                "recommendations": recommendations,
                 "error_count": len(errors),
                 "error_summary": self._summarize_errors(errors)
             }
             
         except Exception as e:
             logger.error(f"Error analyzing file {file_path}: {str(e)}")
+            exception_error = self._create_exception_error(e)
             return {
                 "success": False,
                 "file_path": file_path,
-                "errors": [self._create_exception_error(e)]
+                "errors": [exception_error.to_pydantic_model()]
             }
-    
-    def _create_parsing_error(self, error_message: str) -> Dict[str, Any]:
+      
+    def _create_parsing_error(self, error_message: str) -> CodeError:
         """Create a standardized error for parsing failures."""
         return CodeError(
-            "PARSE_ERROR",
-            f"Failed to parse file: {error_message}",
-            1,
+            type="PARSE_ERROR",
+            message=f"Failed to parse file: {error_message}",
+            line_start=1,
             category=ErrorCategory.SYNTAX,
             severity=ErrorSeverity.CRITICAL
-        ).to_dict()
+        )
     
-    def _create_exception_error(self, exception: Exception) -> Dict[str, Any]:
+    def _create_exception_error(self, exception: Exception) -> CodeError:
         """Create a standardized error for exceptions during analysis."""
         return CodeError(
-            "ANALYSIS_ERROR",
-            f"Error during analysis: {str(exception)}",
-            1,
+            type="ANALYSIS_ERROR",
+            message=f"Error during analysis: {str(exception)}",
+            line_start=1,
             category=ErrorCategory.SYNTAX,
             severity=ErrorSeverity.CRITICAL
-        ).to_dict()
+        )
     
     def _summarize_errors(self, errors: List[CodeError]) -> Dict[str, int]:
-        """
-        Summarize errors by category and severity.
-        
-        Args:
-            errors: List of detected errors
-            
-        Returns:
-            Dictionary with error counts by category and severity
-        """
+
         by_category = {}
         by_severity = {}
         
@@ -220,14 +315,9 @@ class ErrorDetector:
             "by_severity": by_severity,
             "total": len(errors)
         }
-            
+         
     def _detect_python_errors(self) -> List[CodeError]:
-        """
-        Detect errors in Python code.
-        
-        Returns:
-            List of detected errors
-        """
+
         errors = []
         
         # If we have an AST, perform static analysis
@@ -242,9 +332,9 @@ class ErrorDetector:
         if "syntax_error" in self.parsed_code:
             error_info = self.parsed_code["syntax_error"]
             errors.append(CodeError(
-                "PY_SYNTAX_ERROR",
-                f"Python syntax error: {error_info['msg']}",
-                error_info["line"],
+                type="PY_SYNTAX_ERROR",
+                message=f"Python syntax error: {error_info['msg']}",
+                line_start=error_info["line"],
                 column_start=error_info["column"],
                 category=ErrorCategory.SYNTAX,
                 severity=ErrorSeverity.CRITICAL,
@@ -254,15 +344,7 @@ class ErrorDetector:
         return errors
     
     def _detect_python_syntax_errors(self, ast_tree: ast.AST) -> List[CodeError]:
-        """
-        Detect Python syntax errors and issues.
-        
-        Args:
-            ast_tree: Python AST
-            
-        Returns:
-            List of syntax errors
-        """
+
         errors = []
         
         # Check for undefined variables (simplified)
@@ -313,9 +395,9 @@ class ErrorDetector:
             def visit_Name(self, node):
                 if isinstance(node.ctx, ast.Load) and node.id not in defined_vars and node.id not in dir(__builtins__):
                     errors.append(CodeError(
-                        "PY_UNDEFINED_VAR",
-                        f"Potentially undefined variable: {node.id}",
-                        node.lineno,
+                        type="PY_UNDEFINED_VAR",
+                        message=f"Potentially undefined variable: {node.id}",
+                        line_start=node.lineno,
                         category=ErrorCategory.LOGIC,
                         severity=ErrorSeverity.HIGH,
                         suggestion=f"Make sure '{node.id}' is defined before use or check for typos."
@@ -329,15 +411,7 @@ class ErrorDetector:
         return errors
     
     def _detect_python_common_mistakes(self, ast_tree: ast.AST) -> List[CodeError]:
-        """
-        Detect common Python mistakes.
-        
-        Args:
-            ast_tree: Python AST
-            
-        Returns:
-            List of detected common mistakes
-        """
+
         errors = []
         
         # Check for mutable default arguments
@@ -349,9 +423,9 @@ class ErrorDetector:
                         if arg_idx < len(node.args.args):
                             arg_name = node.args.args[arg_idx].arg
                             errors.append(CodeError(
-                                "PY_MUTABLE_DEFAULT",
-                                f"Mutable default argument: {arg_name}",
-                                node.lineno,
+                                type="PY_MUTABLE_DEFAULT",
+                                message=f"Mutable default argument: {arg_name}",
+                                line_start=node.lineno,
                                 category=ErrorCategory.LOGIC,
                                 severity=ErrorSeverity.MEDIUM,
                                 suggestion="Use None as default and initialize the mutable value inside the function."
@@ -369,9 +443,9 @@ class ErrorDetector:
                 if '/' in node.s or '\\' in node.s:
                     if node.s.startswith('/') or (len(node.s) > 1 and node.s[1] == ':'):
                         errors.append(CodeError(
-                            "PY_HARDCODED_PATH",
-                            f"Hardcoded file path: {node.s}",
-                            node.lineno,
+                            type="PY_HARDCODED_PATH",
+                            message=f"Hardcoded file path: {node.s}",
+                            line_start=node.lineno,
                             category=ErrorCategory.BEST_PRACTICE,
                             severity=ErrorSeverity.LOW,
                             suggestion="Consider using path configuration or environment variables."
@@ -385,9 +459,9 @@ class ErrorDetector:
                     if '/' in node.value or '\\' in node.value:
                         if node.value.startswith('/') or (len(node.value) > 1 and node.value[1] == ':'):
                             errors.append(CodeError(
-                                "PY_HARDCODED_PATH",
-                                f"Hardcoded file path: {node.value}",
-                                node.lineno,
+                                type="PY_HARDCODED_PATH",
+                                message=f"Hardcoded file path: {node.value}",
+                                line_start=node.lineno,
                                 category=ErrorCategory.BEST_PRACTICE,
                                 severity=ErrorSeverity.LOW,
                                 suggestion="Consider using path configuration or environment variables."
@@ -403,9 +477,9 @@ class ErrorDetector:
             def visit_ExceptHandler(self, node):
                 if node.type is None:
                     errors.append(CodeError(
-                        "PY_BARE_EXCEPT",
-                        "Bare except clause",
-                        node.lineno,
+                        type="PY_BARE_EXCEPT",
+                        message="Bare except clause",
+                        line_start=node.lineno,
                         category=ErrorCategory.BEST_PRACTICE,
                         severity=ErrorSeverity.MEDIUM,
                         suggestion="Specify the exceptions you want to catch instead of using a bare except."
@@ -419,15 +493,7 @@ class ErrorDetector:
         return errors
     
     def _detect_python_security_issues(self, ast_tree: ast.AST) -> List[CodeError]:
-        """
-        Detect security issues in Python code.
-        
-        Args:
-            ast_tree: Python AST
-            
-        Returns:
-            List of detected security issues
-        """
+
         errors = []
         
         # Check for potentially insecure function calls
@@ -455,9 +521,9 @@ class ErrorDetector:
                 # Check if it's an insecure function
                 if func_name in insecure_functions:
                     errors.append(CodeError(
-                        "PY_SECURITY_RISK",
-                        insecure_functions[func_name],
-                        node.lineno,
+                        type="PY_SECURITY_RISK",
+                        message=insecure_functions[func_name],
+                        line_start=node.lineno,
                         category=ErrorCategory.SECURITY,
                         severity=ErrorSeverity.HIGH,
                         suggestion="Review use of this function, especially with user-provided input."
@@ -469,9 +535,9 @@ class ErrorDetector:
                     for arg in node.args:
                         if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Mod)):
                             errors.append(CodeError(
-                                "PY_SQL_INJECTION",
-                                "Potential SQL injection vulnerability",
-                                node.lineno,
+                                type="PY_SQL_INJECTION",
+                                message="Potential SQL injection vulnerability",
+                                line_start=node.lineno,
                                 category=ErrorCategory.SECURITY,
                                 severity=ErrorSeverity.HIGH,
                                 suggestion="Use parameterized queries instead of string formatting/concatenation."
@@ -486,15 +552,7 @@ class ErrorDetector:
         return errors
     
     def _detect_python_best_practices(self, ast_tree: ast.AST) -> List[CodeError]:
-        """
-        Detect Python best practice violations.
-        
-        Args:
-            ast_tree: Python AST
-            
-        Returns:
-            List of best practice violations
-        """
+
         errors = []
         
         # Check for missing docstrings
@@ -502,9 +560,9 @@ class ErrorDetector:
             def visit_Module(self, node):
                 if not ast.get_docstring(node):
                     errors.append(CodeError(
-                        "PY_NO_MODULE_DOCSTRING",
-                        "Missing module docstring",
-                        1,
+                        type="PY_NO_MODULE_DOCSTRING",
+                        message="Missing module docstring",
+                        line_start=1,
                         category=ErrorCategory.STYLE,
                         severity=ErrorSeverity.LOW,
                         suggestion="Add a module-level docstring at the beginning of the file."
@@ -514,9 +572,9 @@ class ErrorDetector:
             def visit_ClassDef(self, node):
                 if not ast.get_docstring(node):
                     errors.append(CodeError(
-                        "PY_NO_CLASS_DOCSTRING",
-                        f"Missing docstring for class '{node.name}'",
-                        node.lineno,
+                        type="PY_NO_CLASS_DOCSTRING",
+                        message=f"Missing docstring for class '{node.name}'",
+                        line_start=node.lineno,
                         category=ErrorCategory.STYLE,
                         severity=ErrorSeverity.LOW,
                         suggestion=f"Add a docstring for class '{node.name}'."
@@ -527,9 +585,9 @@ class ErrorDetector:
                 # Skip dunder methods (__init__ etc.) for docstring checks
                 if not node.name.startswith('__') and not ast.get_docstring(node):
                     errors.append(CodeError(
-                        "PY_NO_FUNCTION_DOCSTRING",
-                        f"Missing docstring for function '{node.name}'",
-                        node.lineno,
+                        type="PY_NO_FUNCTION_DOCSTRING",
+                        message=f"Missing docstring for function '{node.name}'",
+                        line_start=node.lineno,
                         category=ErrorCategory.STYLE,
                         severity=ErrorSeverity.LOW,
                         suggestion=f"Add a docstring for function '{node.name}'."
@@ -546,9 +604,9 @@ class ErrorDetector:
                 statement_count = sum(1 for _ in ast.walk(node) if isinstance(_, (ast.stmt)))
                 if statement_count > 50:  # Arbitrary threshold
                     errors.append(CodeError(
-                        "PY_COMPLEX_FUNCTION",
-                        f"Function '{node.name}' is too complex ({statement_count} statements)",
-                        node.lineno,
+                        type="PY_COMPLEX_FUNCTION",
+                        message=f"Function '{node.name}' is too complex ({statement_count} statements)",
+                        line_start=node.lineno,
                         category=ErrorCategory.BEST_PRACTICE,
                         severity=ErrorSeverity.MEDIUM,
                         suggestion=f"Consider breaking function '{node.name}' into smaller, more focused functions."
@@ -562,19 +620,14 @@ class ErrorDetector:
         return errors
     
     def _detect_javascript_errors(self) -> List[CodeError]:
-        """
-        Detect errors in JavaScript code.
-        
-        Returns:
-            List of detected errors
-        """
+
         # This is a simplified implementation. In a real-world application,
         # you would use a proper JavaScript parser and linter.
         errors = []
         
         # Very basic pattern-based detections
         js_patterns = [
-            (r'console\.log\(', "PY_CONSOLE_LOG", "Console log statement in production code", 
+            (r'console\.log\(', "JS_CONSOLE_LOG", "Console log statement in production code", 
              ErrorCategory.BEST_PRACTICE, ErrorSeverity.LOW, 
              "Remove console.log statements from production code."),
             
@@ -595,12 +648,12 @@ class ErrorDetector:
             return errors
             
         for i, line in enumerate(self.parser.code_lines):
-            for pattern, code, message, category, severity, suggestion in js_patterns:
+            for pattern, error_type, message, category, severity, suggestion in js_patterns:
                 if re.search(pattern, line):
                     errors.append(CodeError(
-                        code,
-                        message,
-                        i + 1,  # 1-based line numbering
+                        type=error_type,  # Исправлено: было code=code, теперь type=error_type
+                        message=message,
+                        line_start=i + 1, 
                         category=category,
                         severity=severity,
                         suggestion=suggestion,
@@ -610,12 +663,7 @@ class ErrorDetector:
         return errors
     
     def _detect_common_issues(self) -> List[CodeError]:
-        """
-        Detect issues common to all programming languages.
-        
-        Returns:
-            List of detected common issues
-        """
+
         errors = []
         
         # Check for lines that are too long
@@ -623,9 +671,9 @@ class ErrorDetector:
             for i, line in enumerate(self.parser.code_lines):
                 if len(line) > 100:  # Arbitrary threshold
                     errors.append(CodeError(
-                        "COMMON_LONG_LINE",
-                        f"Line too long ({len(line)} characters)",
-                        i + 1,  # 1-based line numbering
+                        type="COMMON_LONG_LINE", 
+                        message=f"Line too long ({len(line)} characters)",
+                        line_start=i + 1, 
                         category=ErrorCategory.STYLE,
                         severity=ErrorSeverity.LOW,
                         suggestion="Consider breaking the line into multiple lines for better readability.",
@@ -637,9 +685,9 @@ class ErrorDetector:
             for i, line in enumerate(self.parser.code_lines):
                 if "TODO" in line or "FIXME" in line:
                     errors.append(CodeError(
-                        "COMMON_TODO",
-                        "TODO or FIXME comment found",
-                        i + 1,  # 1-based line numbering
+                        type="COMMON_TODO_COMMENT",  # Исправлено: было COMMON_LONG_LINE
+                        message=f"TODO or FIXME comment found",
+                        line_start=i + 1,
                         category=ErrorCategory.INFO,
                         severity=ErrorSeverity.INFO,
                         affected_code=line.strip()
@@ -648,15 +696,7 @@ class ErrorDetector:
         return errors
     
     def analyze_directory(self, directory_path: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Analyze all source code files in a directory.
-        
-        Args:
-            directory_path: Path to the directory containing source files
-            
-        Returns:
-            Dictionary mapping file paths to their analysis results
-        """
+
         results = {}
         
         for root, _, files in os.walk(directory_path):
@@ -675,6 +715,7 @@ class ErrorDetector:
                     results[file_path] = self.analyze_file(file_path)
                     
         return results
+    
 
 if __name__ == "__main__":
     # Example usage
@@ -722,9 +763,9 @@ if name == "__main__":  # Undefined variable (missing underscore)
         if result["success"]:
             print(f"Found {result['error_count']} issues:")
             for error in result["errors"]:
-                print(f"  - Line {error['location']['line_start']}: {error['message']} ({error['severity']})")
-                if error.get("suggestion"):
-                    print(f"    Suggestion: {error['suggestion']}")
+                print(f"  - Line {error.line_start}: {error.message} ({error.severity})")
+                if error.suggestion:
+                    print(f"    Suggestion: {error.suggestion}")
                 print()
     finally:
         # Clean up

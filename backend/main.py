@@ -1,10 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, Response
+from fastapi import FastAPI, UploadFile, File, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import base64
 import uvicorn
 from io import BytesIO
 import sys
 import os
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from backend.models import CodeAnalysisRequest, CodeAnalysisResponse, CodeAnalysisResponseWithPDF
@@ -35,8 +36,8 @@ async def analyze_code(request: CodeAnalysisRequest):
         print(f"Ошибка при анализе: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        raise
-
+        raise HTTPException(status_code=400, detail=f"Ошибка анализа кода: {str(e)}")
+    
 @app.post("/analyze_with_pdf", response_model=CodeAnalysisResponseWithPDF)
 async def analyze_code_with_pdf(request: CodeAnalysisRequest):
     """Анализ кода с опциональным PDF отчетом"""
@@ -78,4 +79,4 @@ async def upload_code_file(file: UploadFile = File(...), generate_pdf: bool = Fa
         return code_review_service.review_python_code(request)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    uvicorn.run(app, host="0.0.0.0", port=8026)

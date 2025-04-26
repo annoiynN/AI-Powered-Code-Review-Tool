@@ -104,6 +104,12 @@ class ImprovementSuggestion:
 
 class CodeImprover:
     """Main class for suggesting code improvements."""
+    #fix 
+    def generate_improvements(self, code, language=None, options=None):
+      if language:
+          self.current_language = language
+  
+      return self.improve_code(code)
     
     def __init__(self):
         """Initialize the code improver."""
